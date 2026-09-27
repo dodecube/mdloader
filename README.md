@@ -69,32 +69,19 @@ python -c "import json,struct,sys;m=json.dumps({'action':'ping'}).encode();sys.s
 
 ## Постоянная установка: подпись .xpi
 
-1. Зайти на <https://addons.mozilla.org/developers/> → **Tools → Manage API Keys**,
-   создать JWT issuer и secret.
-2. Локально:
+Полная пошаговая инструкция — **[docs/SIGNING.md](docs/SIGNING.md)**: что такое AMO,
+как получить API-ключи, подписать и установить расширение.
 
-   ```bash
-   npm install
-   export WEB_EXT_API_KEY=user:12345:67
-   export WEB_EXT_API_SECRET=…
-   npm run sign
-   ```
+Коротко:
 
-   Подписанный файл появится в `artifacts/*.xpi`.
-3. Через CI: положить ключи в секреты репозитория как `AMO_JWT_ISSUER` и
-   `AMO_JWT_SECRET`, затем
+```bash
+npm install
+set WEB_EXT_API_KEY=user:12345:67        # Windows cmd
+set WEB_EXT_API_SECRET=…
+npm run sign                              # -> artifacts/*.xpi
+```
 
-   ```bash
-   git tag v1.2.0 && git push origin v1.2.0
-   ```
-
-   Workflow `.github/workflows/release.yml` подпишет сборку и приложит `.xpi`
-   к GitHub-релизу.
-4. Установить: открыть `.xpi` в Zen (`about:addons` → шестерёнка → «Install
-   Add-on From File»).
-
-Номер версии в AMO расходуется безвозвратно: для каждой новой подписи
-поднимайте `version` в `extension/manifest.json`.
+Затем `about:addons` → шестерёнка → **Install Add-on From File…**
 
 ## Разработка
 
