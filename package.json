@@ -1,0 +1,15 @@
+{
+  "name": "mdloader",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Firefox/Zen extension for downloading tracks via a local yt-dlp native host",
+  "scripts": {
+    "lint": "web-ext lint --source-dir extension --self-hosted",
+    "start": "web-ext run --source-dir extension",
+    "build": "web-ext build --source-dir extension --artifacts-dir artifacts --overwrite-dest",
+    "sign": "web-ext sign --source-dir extension --artifacts-dir artifacts --channel unlisted"
+  },
+  "devDependencies": {
+    "web-ext": "^8.3.0"
+  }
+}

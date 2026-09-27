@@ -1,4 +1,5 @@
 @echo off
-REM Wrapper: Windows native messaging hosts must be an .exe/.bat, not a .py file.
-REM Adjust PYTHONW/python path below if python is not on PATH.
-python "%~dp0..\msg.py"
+REM Windows native messaging hosts must be an .exe/.bat, never a bare .py file.
+REM Set MDLOADER_PYTHON if python is not on PATH, e.g. C:\Python312\pythonw.exe
+if "%MDLOADER_PYTHON%"=="" set "MDLOADER_PYTHON=python"
+"%MDLOADER_PYTHON%" "%~dp0..\host" %*

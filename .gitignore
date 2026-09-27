@@ -12,3 +12,5 @@ cookies.txt
 downloads/
 .vscode/
 .idea/
+artifacts/
+config.json

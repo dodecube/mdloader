@@ -1,7 +1,0 @@
-{
-  "name": "com.example.youtube_downloader",
-  "description": "mdloader native host (yt-dlp bridge)",
-  "path": "E:\\home\\projects\\web\\mdloader\\native-host\\run_msg.bat",
-  "type": "stdio",
-  "allowed_extensions": ["mdloader@dodecube"]
-}

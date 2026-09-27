@@ -1,8 +1,13 @@
 {
   "manifest_version": 3,
   "name": "librezam-modified",
-  "version": "1.1",
+  "version": "1.2.0",
   "description": "Download current tab URL or last.fm tracks using native messaging",
+  "data_collection_permissions": {
+    "required": [
+      "none"
+    ]
+  },
   "browser_specific_settings": {
     "gecko": {
       "id": "mdloader@dodecube",
@@ -29,12 +34,19 @@
     }
   },
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   },
   "content_scripts": [
     {
-      "matches": ["*://*.last.fm/*", "*://*.youtube.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "*://*.last.fm/*",
+        "*://*.youtube.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_end"
     }
   ],
