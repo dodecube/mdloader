@@ -1,124 +1,77 @@
-// content.js
-console.log("[Librezam] Скрипт запущен");
+// content.js — извлекает данные о треке и плейлисте по запросу из background.
+// Своего UI здесь нет: загрузка запускается кликом по иконке расширения.
 
-function getTrackData() {
-    const host = window.location.hostname;
-
-    // YouTube - используем прямую ссылку
-    if (host.includes('youtube.com')) {
-        if (window.location.href.includes('watch?v=')) {
-            return { action: 'downloadUrl', url: window.location.href };
-        }
-        const link = document.querySelector('a.ytmVideoInfoVideoTitle');
-        if (link && link.href && link.href.includes('watch?v=')) {
-            return { action: 'downloadUrl', url: link.href };
-        }
-        return null;
-    }
-
-    // Last.fm - используем экшен downloadTrack, который есть в твоем background.js
-    if (host.includes('last.fm')) {
-        // 1. Сначала пробуем взять из плеера (самое точное)
-        const playerLink = document.querySelector('a.ytmVideoInfoVideoTitle');
-        if (playerLink && playerLink.href && playerLink.href.includes('youtube.com/watch')) {
-            return { 
-                action: 'downloadUrl', 
-                url: playerLink.href 
-            };
-        }
-        
-        // 2. Fallback на старый метод (если плеер не открыт)
-        const selectors = [
-            { a: '.player-bar-artist-name', t: '.player-bar-track-name' },
-            { a: '.header-new-crumb span', t: 'h1[itemprop="name"]' },
-            { a: '.header-featured-artist', t: '.header-title-display-name' }
-        ];
-
-        for (let s of selectors) {
-            const artistEl = document.querySelector(s.a);
-            const trackEl = document.querySelector(s.t);
-            if (artistEl && trackEl) {
-                const artist = artistEl.textContent.trim();
-                const track = trackEl.textContent.trim();
-                if (artist && track) {
-                    return { 
-                        action: 'downloadTrack', 
-                        artist: artist, 
-                        track: track 
-                    };
-                }
-            }
-        }
-    }
-    return null;
+function youtubeTrack() {
+  if (location.href.includes("watch?v=")) {
+    // Убираем list=/index=, чтобы случайно не утянуть весь плейлист.
+    const url = new URL(location.href);
+    for (const param of ["list", "index", "start_radio", "pp"]) url.searchParams.delete(param);
+    return { url: url.toString() };
+  }
+  const link = document.querySelector("a.ytmVideoInfoVideoTitle");
+  return link?.href?.includes("watch?v=") ? { url: link.href } : null;
 }
 
-function addDownloadButton() {
-    if (document.querySelector('.librezam-download-btn')) return;
-
-    const btn = document.createElement('button');
-    btn.textContent = '⬇️ Download';
-    btn.className = 'librezam-download-btn';
-    
-    // Твои оригинальные стили
-    btn.style.cssText = `
-        position: fixed !important;
-        bottom: 90px !important;
-        right: 20px !important;
-        z-index: 2147483647 !important;
-        padding: 12px 18px !important;
-        background: #d51007 !important;
-        color: #ffffff !important;
-        border: none !important;
-        border-radius: 25px !important;
-        cursor: pointer !important;
-        font-size: 14px !important;
-        font-weight: bold !important;
-        font-family: Arial, sans-serif !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
-        transition: background 0.2s ease !important;
-        user-select: none !important;
-        line-height: 1 !important;
-    `;
-    
-    btn.onclick = (e) => {
-        e.preventDefault();
-        const data = getTrackData();
-        
-        if (!data) {
-            btn.textContent = '❌ Трек не найден';
-            setTimeout(() => btn.textContent = '⬇️ Download', 2000);
-            return;
-        }
-
-        btn.textContent = '⏳ В очереди...';
-        
-        // Отправляем сообщение в background.js
-        chrome.runtime.sendMessage(data, (response) => {
-            // Твой background.js вернет {success: true}
-            if (response && response.success) {
-                btn.textContent = '✅ Добавлено';
-            } else {
-                btn.textContent = '❌ Ошибка';
-            }
-            setTimeout(() => btn.textContent = '⬇️ Download', 2000);
-        });
-    };
-    
-    document.body.appendChild(btn);
+function youtubePlaylist() {
+  const url = new URL(location.href);
+  const list = url.searchParams.get("list");
+  if (!list) return null;
+  const title =
+    document.querySelector("yt-formatted-string#text.ytd-playlist-panel-renderer")?.textContent?.trim() ||
+    document.querySelector("h1.ytd-playlist-header-renderer")?.textContent?.trim() ||
+    document.querySelector("#header-description h1")?.textContent?.trim() ||
+    null;
+  return { url: `https://www.youtube.com/playlist?list=${list}`, title };
 }
 
-// Запуск
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', addDownloadButton);
-} else {
-    addDownloadButton();
-}
+function lastfmTrack() {
+  // Открытый плеер — самый точный источник: у него есть прямая ссылка на YouTube.
+  const playerLink = document.querySelector("a.ytmVideoInfoVideoTitle");
+  if (playerLink?.href?.includes("youtube.com/watch")) {
+    return { url: playerLink.href };
+  }
 
-// Следим за изменениями (SPA)
-const observer = new MutationObserver(() => {
-    if (!document.querySelector('.librezam-download-btn')) {
-        addDownloadButton();
+  const selectors = [
+    { artist: ".player-bar-artist-name", track: ".player-bar-track-name" },
+    { artist: ".header-new-crumb span", track: 'h1[itemprop="name"]' },
+    { artist: ".header-featured-artist", track: ".header-title-display-name" },
+  ];
+  for (const selector of selectors) {
+    const artist = document.querySelector(selector.artist)?.textContent.trim();
+    const track = document.querySelector(selector.track)?.textContent.trim();
+    if (artist && track) {
+      return { url: `ytsearch:${artist} - ${track}`, label: `${artist} - ${track}` };
     }
+  }
+  return null;
+}
+
+function lastfmAlbum() {
+  // Страница альбома last.fm: /music/<artist>/<album>
+  const match = location.pathname.match(/^\/music\/([^/]+)\/(?!_\/)([^/]+)\/?$/);
+  if (!match) return null;
+  const artist = decodeURIComponent(match[1]).replace(/\+/g, " ");
+  const album = decodeURIComponent(match[2]).replace(/\+/g, " ");
+  const label = `${artist} - ${album}`;
+  // Ищем альбом на YouTube: yt-dlp сам развернёт найденный плейлист.
+  return { url: `ytsearch1:${label} full album`, title: label, label };
+}
+
+/** @returns {{url: string, title?: string|null, label?: string}|null} */
+function collect(mode) {
+  const host = location.hostname;
+  if (host.includes("youtube.com")) {
+    return mode === "playlist" ? youtubePlaylist() : youtubeTrack();
+  }
+  if (host.includes("last.fm")) {
+    return mode === "playlist" ? lastfmAlbum() : lastfmTrack();
+  }
+  return null;
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.action === "collect") {
+    sendResponse(collect(message.mode));
+  }
+  return false;
 });
-observer.observe(document.body, { childList: true, subtree: true });

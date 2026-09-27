@@ -164,9 +164,9 @@ def process_downloads(config: Config, mp3_files: list[Path]) -> None:
 
 
 def cleanup(download_dir: Path) -> int:
-    """Remove leftover thumbnails and partial downloads."""
+    """Remove leftover thumbnails and partial downloads (including playlist folders)."""
     removed = 0
-    for entry in download_dir.iterdir():
+    for entry in download_dir.rglob("*"):
         if entry.is_file() and entry.suffix.lower() in TEMP_SUFFIXES:
             try:
                 entry.unlink()

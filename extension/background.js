@@ -1,270 +1,295 @@
-// background.js – основной сервис-воркер
+// background.js — очередь загрузок и мост к нативному хосту.
+
+const NATIVE_HOST = "com.example.youtube_downloader";
+const DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000; // плейлист может качаться долго
+const HISTORY_LIMIT = 100;
+
 let downloadPort = null;
 let downloadTimeout = null;
 let isDownloading = false;
-let downloadQueue = [];       // текущая очередь
-let downloadHistory = [];     // архив завершённых и ошибочных
+let downloadQueue = [];
+let downloadHistory = [];
 
-// Загрузка сохранённых данных при старте
+/* ---------------------------------------------------------------- storage */
+
 async function loadStorage() {
-  const data = await chrome.storage.local.get(['downloadQueue', 'downloadHistory']);
+  const data = await chrome.storage.local.get(["downloadQueue", "downloadHistory"]);
   downloadQueue = data.downloadQueue || [];
   downloadHistory = data.downloadHistory || [];
-  updateQueueBadge();
-  // Если был незавершённый download – сбросить статусы queued, но downloading не восстанавливаем
-  let needSave = false;
-  for (let job of downloadQueue) {
-    if (job.status === 'downloading') {
-      job.status = 'queued';
-      needSave = true;
-    }
+  // После перезапуска браузера незавершённые задачи возвращаем в очередь.
+  for (const job of downloadQueue) {
+    if (job.status === "downloading") job.status = "queued";
   }
-  if (needSave) saveToStorage();
-  // Запустить обработку очереди, если нужно
-  if (!isDownloading && downloadQueue.some(j => j.status === 'queued')) {
-    processNextDownload();
+  await save();
+  processNext();
+}
+
+function save() {
+  return chrome.storage.local.set({ downloadQueue, downloadHistory });
+}
+
+function setActive(progress) {
+  return chrome.storage.local.set({ activeProgress: progress });
+}
+
+/* ------------------------------------------------------------------ badge */
+
+function updateBadge() {
+  const downloading = downloadQueue.filter((j) => j.status === "downloading").length;
+  const queued = downloadQueue.filter((j) => j.status === "queued").length;
+  let text = "";
+  let color = "#FF9800";
+  if (downloading > 0) {
+    text = queued > 0 ? `${queued}+` : "...";
+    color = "#4CAF50";
+  } else if (queued > 0) {
+    text = String(queued);
   }
+  chrome.action.setBadgeText({ text });
+  if (text) chrome.action.setBadgeBackgroundColor({ color });
 }
 
-function saveToStorage() {
-  chrome.storage.local.set({ downloadQueue, downloadHistory });
+function notify(message, type) {
+  if (type !== "error" && type !== "success") return;
+  chrome.notifications.create({
+    type: "basic",
+    iconUrl: "icon.png",
+    title: type === "error" ? "❌ Ошибка загрузки" : "✅ Загрузка завершена",
+    message: String(message).slice(0, 300),
+    priority: type === "error" ? 2 : 1,
+  });
 }
 
-// Добавить в историю (завершённые или ошибки)
-function addToHistory(job) {
-  const copy = { ...job };
-  downloadHistory.unshift(copy); // свежие сверху
-  // Ограничим историю 100 записями
-  if (downloadHistory.length > 100) downloadHistory.pop();
-  saveToStorage();
-}
+/* ------------------------------------------------------------------- jobs */
 
-// Обновить бейдж иконки
-function updateQueueBadge() {
-  const downloadingCount = downloadQueue.filter(j => j.status === 'downloading').length;
-  const queuedCount = downloadQueue.filter(j => j.status === 'queued').length;
-  if (downloadingCount > 0) {
-    chrome.action.setBadgeText({ text: queuedCount > 0 ? `${queuedCount}+` : '...' });
-    chrome.action.setBadgeBackgroundColor({ color: '#4CAF50' });
-  } else if (queuedCount > 0) {
-    chrome.action.setBadgeText({ text: queuedCount.toString() });
-    chrome.action.setBadgeBackgroundColor({ color: '#FF9800' });
-  } else {
-    chrome.action.setBadgeText({ text: '' });
-  }
-}
-
-// Добавление задания в очередь
-function addJob(job) {
-  downloadQueue.push(job);
-  saveToStorage();
-  updateQueueBadge();
-  showNotification(`Added to queue: ${job.searchQuery || job.url}`, 'info');
-  if (!isDownloading) processNextDownload();
-}
-
-// Создание задания из URL или поискового запроса
-function createJob(url, searchQuery = null, tabId = null) {
+function createJob({ url, label, mode, tabId }) {
   return {
-    id: Date.now() + '-' + Math.random().toString(36).substr(2, 6),
-    url: url,
-    searchQuery: searchQuery,
-    tabId: tabId,
-    status: 'queued',
-    addedAt: new Date().toISOString()
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    url,
+    label: label || url,
+    mode: mode === "playlist" ? "playlist" : "track",
+    tabId: tabId ?? null,
+    status: "queued",
+    progress: 0,
+    progressMessage: "В очереди",
+    addedAt: new Date().toISOString(),
   };
 }
 
-// Обработка сообщений от content script и popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'downloadTrack') {
-    const { artist, track } = message;
-    const searchQuery = `${artist} - ${track}`;
-    const ytUrl = `ytsearch:${searchQuery}`;
-    const job = createJob(ytUrl, searchQuery, sender.tab?.id);
-    addJob(job);
-    sendResponse({ success: true, jobId: job.id });
-  } 
-  else if (message.action === 'cancelJob') {
-    const index = downloadQueue.findIndex(j => j.id === message.jobId);
-    if (index !== -1) {
-      downloadQueue.splice(index, 1);
-      saveToStorage();
-      updateQueueBadge();
-      showNotification('Job cancelled from queue', 'info');
-      if (!isDownloading) processNextDownload();
-    }
-    sendResponse({ success: true });
+async function addJob(job) {
+  const duplicate = downloadQueue.find((j) => j.url === job.url && j.mode === job.mode);
+  if (duplicate) {
+    return { ok: false, error: "Уже в очереди", job: duplicate };
   }
-  else if (message.action === 'retryJob') {
-    const jobInHistory = downloadHistory.find(j => j.id === message.jobId);
-    if (jobInHistory) {
-      const newJob = createJob(jobInHistory.url, jobInHistory.searchQuery, jobInHistory.tabId);
-      addJob(newJob);
-      // удаляем из истории (необязательно)
-      const idx = downloadHistory.findIndex(j => j.id === message.jobId);
-      if (idx !== -1) downloadHistory.splice(idx, 1);
-      saveToStorage();
-    }
-    sendResponse({ success: true });
-  }
-  else if (message.action === 'clearHistory') {
-    downloadHistory = downloadHistory.filter(j => j.status === 'downloading'); // не удаляем активные
-    saveToStorage();
-    sendResponse({ success: true });
-  }
-  else if (message.action === 'downloadUrl') {
-    const job = createJob(message.url, null, sender.tab?.id);
-    addJob(job);
-    sendResponse({ success: true, jobId: job.id });
-  }
-  return true; // асинхронный ответ
-});
+  downloadQueue.push(job);
+  await save();
+  updateBadge();
+  processNext();
+  return { ok: true, job };
+}
 
-// Клик по иконке (без попапа) – скачать текущий URL
-chrome.action.onClicked.addListener(async (tab) => {
-  const job = createJob(tab.url, null, tab.id);
-  addJob(job);
-});
+/** Спрашивает у content-скрипта активной вкладки, что качать. */
+async function collectFromTab(mode) {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) return { error: "Нет активной вкладки" };
 
-// Обработка очереди
-async function processNextDownload() {
+  let data = null;
+  try {
+    data = await chrome.tabs.sendMessage(tab.id, { action: "collect", mode });
+  } catch {
+    // Content-скрипт не внедрён (страница вне last.fm/youtube).
+  }
+
+  if (!data && mode === "track" && /^https?:/.test(tab.url || "")) {
+    data = { url: tab.url }; // запасной вариант: просто адрес вкладки
+  }
+  if (!data) {
+    return {
+      error:
+        mode === "playlist"
+          ? "Плейлист или альбом на этой странице не найден"
+          : "Трек на этой странице не найден",
+    };
+  }
+  return { data, tabId: tab.id, title: tab.title };
+}
+
+async function enqueueCurrent(mode) {
+  const result = await collectFromTab(mode);
+  if (result.error) return { ok: false, error: result.error };
+
+  const { data, tabId, title } = result;
+  const label = data.label || data.title || title || data.url;
+  return addJob(createJob({ url: data.url, label, mode, tabId }));
+}
+
+/* -------------------------------------------------------------- pipeline */
+
+function processNext() {
   if (isDownloading) return;
-  const nextJob = downloadQueue.find(j => j.status === 'queued');
-  if (!nextJob) {
-    isDownloading = false;
-    updateQueueBadge();
+  const job = downloadQueue.find((j) => j.status === "queued");
+  if (!job) {
+    updateBadge();
+    setActive(null);
     return;
   }
   isDownloading = true;
-  nextJob.status = 'downloading';
-  nextJob.startedAt = new Date().toISOString();
-  saveToStorage();
-  updateQueueBadge();
-  await startDownload(nextJob);
+  job.status = "downloading";
+  job.startedAt = new Date().toISOString();
+  save();
+  updateBadge();
+  startDownload(job);
 }
 
 async function startDownload(job) {
   try {
-    if (downloadPort) {
-      downloadPort.disconnect();
-      downloadPort = null;
-    }
-    // Таймаут
-    downloadTimeout = setTimeout(() => {
-      handleDownloadError('Download timed out', job);
-    }, 300000);
+    disconnect();
+    armTimeout(job);
 
-    downloadPort = chrome.runtime.connectNative('com.example.youtube_downloader');
-    downloadPort.onMessage.addListener((response) => handleDownloadResponse(response, job));
-    downloadPort.onDisconnect.addListener(() => handleDownloadDisconnect(job));
+    downloadPort = chrome.runtime.connectNative(NATIVE_HOST);
+    downloadPort.onMessage.addListener((response) => onHostMessage(response, job));
+    downloadPort.onDisconnect.addListener(() => onHostDisconnect(job));
 
-    // Читаем настройку использования cookies
-    const storage = await chrome.storage.local.get(['useCookies']);
-    const useCookies = storage.useCookies === true;
-
+    const { useCookies } = await chrome.storage.local.get(["useCookies"]);
     downloadPort.postMessage({
-      action: 'download',
+      action: "download",
       url: job.url,
-      useCookies: useCookies   // <-- добавляем флаг
+      useCookies: useCookies === true,
+      playlist: job.mode === "playlist",
     });
-  } catch (err) {
-    handleDownloadError('Native host connection failed: ' + err.message, job);
+  } catch (error) {
+    finish(job, false, `Не удалось подключиться к хосту: ${error.message}`);
   }
 }
 
-function handleDownloadResponse(response, job) {
-  if (downloadTimeout) {
-    clearTimeout(downloadTimeout);
-    downloadTimeout = setTimeout(() => handleDownloadError('Timeout', job), 300000);
-  }
-  if (response.status === 'progress') {
-    let progressText = response.progress !== undefined ? `${Math.round(response.progress)}%` : '...';
-    chrome.action.setBadgeText({ text: progressText });
-    showNotification(response.message, 'info', null, response.progress);
-  } 
-  else if (response.status === 'success') {
-    handleDownloadSuccess(job);
-  } 
-  else if (response.status === 'error') {
-    handleDownloadError(response.message, job);
+function armTimeout(job) {
+  clearTimeout(downloadTimeout);
+  downloadTimeout = setTimeout(() => finish(job, false, "Превышено время ожидания"), DOWNLOAD_TIMEOUT_MS);
+}
+
+function disconnect() {
+  clearTimeout(downloadTimeout);
+  if (downloadPort) {
+    try {
+      downloadPort.disconnect();
+    } catch {
+      /* порт уже закрыт */
+    }
+    downloadPort = null;
   }
 }
 
-function handleDownloadSuccess(job) {
-  if (downloadTimeout) clearTimeout(downloadTimeout);
-  job.status = 'completed';
-  job.completedAt = new Date().toISOString();
-  // Удаляем из очереди, добавляем в историю
-  const idx = downloadQueue.findIndex(j => j.id === job.id);
-  if (idx !== -1) downloadQueue.splice(idx, 1);
-  addToHistory(job);
-  saveToStorage();
-  updateQueueBadge();
-  showNotification(`✅ Download completed: ${job.searchQuery || job.url}`, 'success');
-  if (downloadPort) { downloadPort.disconnect(); downloadPort = null; }
+function onHostMessage(response, job) {
+  if (response.status === "progress") {
+    armTimeout(job);
+    job.progress = Math.round(response.progress ?? job.progress);
+    job.progressMessage = response.message || "";
+    chrome.action.setBadgeText({ text: `${job.progress}%` });
+    setActive({ jobId: job.id, label: job.label, mode: job.mode, progress: job.progress, message: job.progressMessage });
+  } else if (response.status === "success") {
+    finish(job, true, response.message || "Готово");
+  } else if (response.status === "error") {
+    finish(job, false, response.message || "Неизвестная ошибка");
+  }
+}
+
+function onHostDisconnect(job) {
+  if (job.status === "downloading") {
+    finish(job, false, "Соединение с нативным хостом потеряно");
+  }
+}
+
+async function finish(job, ok, message) {
+  if (job.status !== "downloading") return; // защита от двойного завершения
+  disconnect();
+
+  job.status = ok ? "completed" : "error";
+  job.progress = ok ? 100 : job.progress;
+  job.progressMessage = message;
+  job.finishedAt = new Date().toISOString();
+  if (!ok) job.errorMsg = message;
+
+  const index = downloadQueue.findIndex((j) => j.id === job.id);
+  if (index !== -1) downloadQueue.splice(index, 1);
+  downloadHistory.unshift({ ...job });
+  downloadHistory = downloadHistory.slice(0, HISTORY_LIMIT);
+
+  await save();
+  await setActive(null);
+  updateBadge();
+  notify(`${job.label}: ${message}`, ok ? "success" : "error");
+
   isDownloading = false;
-  processNextDownload();
+  processNext();
 }
 
-function handleDownloadError(msg, job) {
-  if (downloadTimeout) clearTimeout(downloadTimeout);
-  job.status = 'error';
-  job.errorMsg = msg;
-  job.failedAt = new Date().toISOString();
-  const idx = downloadQueue.findIndex(j => j.id === job.id);
-  if (idx !== -1) downloadQueue.splice(idx, 1);
-  addToHistory(job);
-  saveToStorage();
-  updateQueueBadge();
-  showNotification(`❌ ${msg}`, 'error');
-  if (downloadPort) { downloadPort.disconnect(); downloadPort = null; }
-  isDownloading = false;
-  processNextDownload();
-}
+/* --------------------------------------------------------------- messages */
 
-function handleDownloadDisconnect(job) {
-  if (downloadTimeout) clearTimeout(downloadTimeout);
-  // Если ещё не обработано – ошибка
-  if (job.status === 'downloading') {
-    handleDownloadError('Connection lost to native host', job);
-  } else {
-    if (downloadPort) downloadPort = null;
-    isDownloading = false;
-    processNextDownload();
-  }
-}
+const handlers = {
+  async enqueueCurrent({ mode }) {
+    return enqueueCurrent(mode);
+  },
+  async cancelJob({ jobId }) {
+    const index = downloadQueue.findIndex((j) => j.id === jobId && j.status === "queued");
+    if (index === -1) return { ok: false, error: "Задача уже выполняется" };
+    downloadQueue.splice(index, 1);
+    await save();
+    updateBadge();
+    return { ok: true };
+  },
+  async retryJob({ jobId }) {
+    const old = downloadHistory.find((j) => j.id === jobId);
+    if (!old) return { ok: false, error: "Задача не найдена" };
+    downloadHistory = downloadHistory.filter((j) => j.id !== jobId);
+    await save();
+    return addJob(createJob({ url: old.url, label: old.label, mode: old.mode, tabId: old.tabId }));
+  },
+  async clearHistory() {
+    downloadHistory = [];
+    await save();
+    return { ok: true };
+  },
+  async clearQueue() {
+    downloadQueue = downloadQueue.filter((j) => j.status === "downloading");
+    await save();
+    updateBadge();
+    return { ok: true };
+  },
+};
 
-function showNotification(message, type, tabId = null, progress = null) {
-    // Показываем уведомления ТОЛЬКО для ошибок и завершения
-    if (type !== 'error' && type !== 'success') return;
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const handler = handlers[message?.action];
+  if (!handler) return false;
+  handler(message)
+    .then(sendResponse)
+    .catch((error) => sendResponse({ ok: false, error: error.message }));
+  return true; // ответ придёт асинхронно
+});
 
-    chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icon.png',
-        title: type === 'error' ? '❌ Download Error' : '✅ Download Complete',
-        message: message,
-        priority: type === 'error' ? 2 : 1
-    });
-}
+/* ----------------------------------------------------------- context menu */
 
-// Контекстное меню (оставляем как есть)
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.contextMenus.create({ id: 'showQueue', title: 'Show Download Queue', contexts: ['action'] });
-  chrome.contextMenus.create({ id: 'clearQueue', title: 'Clear Download Queue', contexts: ['action'] });
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: "downloadPlaylist", title: "Скачать альбом / плейлист", contexts: ["action"] });
+    chrome.contextMenus.create({ id: "openQueue", title: "Открыть очередь во вкладке", contexts: ["action"] });
+    chrome.contextMenus.create({ id: "clearQueue", title: "Очистить очередь", contexts: ["action"] });
+  });
 });
-chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId === 'showQueue') {
-    const q = downloadQueue.filter(j => j.status === 'queued').length;
-    const d = downloadQueue.filter(j => j.status === 'downloading').length;
-    showNotification(`Queue: ${q} queued, ${d} downloading`, 'info', tab.id);
-  } else if (info.menuItemId === 'clearQueue') {
-    downloadQueue = downloadQueue.filter(j => j.status === 'downloading');
-    saveToStorage();
-    updateQueueBadge();
-    showNotification('Cleared queued items', 'info', tab.id);
+
+chrome.contextMenus.onClicked.addListener(async (info) => {
+  if (info.menuItemId === "downloadPlaylist") {
+    const result = await enqueueCurrent("playlist");
+    if (!result.ok) notify(result.error, "error");
+    try {
+      await chrome.action.openPopup();
+    } catch {
+      /* openPopup доступен не во всех сборках — не критично */
+    }
+  } else if (info.menuItemId === "openQueue") {
+    chrome.tabs.create({ url: chrome.runtime.getURL("popup.html?view=tab") });
+  } else if (info.menuItemId === "clearQueue") {
+    await handlers.clearQueue({});
   }
 });
 
-// Загрузка сохранённого состояния при старте
 loadStorage();

@@ -12,8 +12,8 @@ from .messaging import configure_logging, read_message, send_error, send_progres
 log = logging.getLogger("mdloader.host")
 
 
-def handle_download(config: Config, url: str, use_cookies: bool) -> None:
-    send_progress("🚀 Запуск загрузки...", 5)
+def handle_download(config: Config, url: str, use_cookies: bool, playlist: bool = False) -> None:
+    send_progress("🚀 Загрузка плейлиста..." if playlist else "🚀 Запуск загрузки...", 5)
 
     valid, result = validate_url(url)
     if not valid:
@@ -31,15 +31,19 @@ def handle_download(config: Config, url: str, use_cookies: bool) -> None:
         return
     send_progress("✅ Зависимости проверены...", 15)
 
-    outcome = download(config, result, use_cookies)
+    outcome = download(config, result, use_cookies, playlist)
     if not outcome.ok:
         send_error(f"❌ {outcome.message}")
         return
 
-    send_progress("🎨 Обработка обложек и тегов...", 95)
+    send_progress("🎨 Обработка обложек и тегов...", 96)
     media.process_downloads(config, outcome.files)
     media.cleanup(config.download_dir)
-    send_success("🎉 Загрузка завершена!")
+
+    if outcome.folder is not None:
+        send_success(f"🎉 {outcome.message} → {outcome.folder.name}")
+    else:
+        send_success(f"🎉 {outcome.message}")
 
 
 def handle(config: Config, message: dict) -> None:
@@ -49,7 +53,12 @@ def handle(config: Config, message: dict) -> None:
         if not url:
             send_error("❌ URL не передан")
             return
-        handle_download(config, url, bool(message.get("useCookies", False)))
+        handle_download(
+            config,
+            url,
+            bool(message.get("useCookies", False)),
+            bool(message.get("playlist", False)),
+        )
     elif action == "ping":
         ok, version = probe_yt_dlp(config)
         send_success(f"yt-dlp {version}") if ok else send_error(version)

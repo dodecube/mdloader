@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "librezam-modified",
-  "version": "1.2.0",
-  "description": "Download current tab URL or last.fm tracks using native messaging",
+  "version": "1.3.0",
+  "description": "Скачивание треков и альбомов с YouTube и last.fm через локальный yt-dlp",
   "data_collection_permissions": {
     "required": [
       "none"
@@ -27,7 +27,7 @@
     "*://*.youtube.com/*"
   ],
   "action": {
-    "default_title": "Download Manager",
+    "default_title": "mdloader — скачать трек",
     "default_popup": "popup.html",
     "default_icon": {
       "128": "icon.png"
