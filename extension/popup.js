@@ -182,8 +182,10 @@ async function init() {
   await render();
 
   // Клик по иконке = сразу качаем текущий трек (поведение старой версии).
-  // Во вкладке этого не делаем: она открывается для просмотра очереди.
-  if (!isTabView) startDownload("track");
+  // Пункт «Открыть меню» в ПКМ выставляет флаг, который это подавляет.
+  const { suppressAutoDownload } = await chrome.storage.local.get(["suppressAutoDownload"]);
+  await chrome.storage.local.remove("suppressAutoDownload");
+  if (!isTabView && !suppressAutoDownload) startDownload("track");
 }
 
 init();

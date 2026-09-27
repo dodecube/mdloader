@@ -270,21 +270,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: "openMenu", title: "Открыть меню (без загрузки)", contexts: ["action"] });
+    chrome.contextMenus.create({ id: "sep1", type: "separator", contexts: ["action"] });
     chrome.contextMenus.create({ id: "downloadPlaylist", title: "Скачать альбом / плейлист", contexts: ["action"] });
     chrome.contextMenus.create({ id: "openQueue", title: "Открыть очередь во вкладке", contexts: ["action"] });
     chrome.contextMenus.create({ id: "clearQueue", title: "Очистить очередь", contexts: ["action"] });
   });
 });
 
+async function openPopup({ autoDownload }) {
+  // Попап сам решает, качать ли трек при открытии.
+  await chrome.storage.local.set({ suppressAutoDownload: !autoDownload });
+  try {
+    await chrome.action.openPopup();
+  } catch {
+    // openPopup доступен не во всех сборках — открываем очередь во вкладке.
+    await chrome.storage.local.remove("suppressAutoDownload");
+    chrome.tabs.create({ url: chrome.runtime.getURL("popup.html?view=tab") });
+  }
+}
+
 chrome.contextMenus.onClicked.addListener(async (info) => {
-  if (info.menuItemId === "downloadPlaylist") {
+  if (info.menuItemId === "openMenu") {
+    await openPopup({ autoDownload: false });
+  } else if (info.menuItemId === "downloadPlaylist") {
     const result = await enqueueCurrent("playlist");
     if (!result.ok) notify(result.error, "error");
-    try {
-      await chrome.action.openPopup();
-    } catch {
-      /* openPopup доступен не во всех сборках — не критично */
-    }
+    await openPopup({ autoDownload: false });
   } else if (info.menuItemId === "openQueue") {
     chrome.tabs.create({ url: chrome.runtime.getURL("popup.html?view=tab") });
   } else if (info.menuItemId === "clearQueue") {

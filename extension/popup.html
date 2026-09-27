@@ -2,10 +2,15 @@
 <html lang="ru">
   <head>
     <meta charset="utf-8" />
+    <meta name="color-scheme" content="dark" />
     <title>mdloader</title>
     <style>
       :root {
-        --bg: rgba(22, 22, 26, 0.72);
+        /* Firefox рисует попап на непрозрачной панели: настоящей прозрачности
+           до рабочего стола добиться нельзя. Поэтому фон плотный, а «стекло»
+           набирается градиентом, тонкими рамками и подсветкой сверху. */
+        color-scheme: dark;
+        --bg: #17171b;
         --panel: rgba(255, 255, 255, 0.06);
         --panel-hover: rgba(255, 255, 255, 0.1);
         --border: rgba(255, 255, 255, 0.12);
@@ -23,27 +28,25 @@
         box-sizing: border-box;
       }
 
-      html,
+      html {
+        background: var(--bg);
+      }
+
       body {
         margin: 0;
+        padding: 14px;
         min-width: 360px;
         max-width: 420px;
         font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
         font-size: 13px;
         color: var(--text);
-        background: transparent;
+        background:
+          radial-gradient(120% 90% at 50% -20%, rgba(255, 255, 255, 0.09), transparent 60%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0) 45%),
+          var(--bg);
       }
 
-      body {
-        padding: 14px;
-        background: var(--bg);
-        backdrop-filter: blur(24px) saturate(160%);
-        -webkit-backdrop-filter: blur(24px) saturate(160%);
-      }
-
-      /* Во вкладке размытие не по чему применять — даём плотный фон. */
       body.tab-view {
-        background: #16161a;
         max-width: 640px;
         margin: 0 auto;
         min-height: 100vh;
