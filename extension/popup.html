@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Download Manager</title>
+  <style>
+    body { width: 500px; font-family: sans-serif; margin: 0; padding: 10px; }
+    h3 { margin: 10px 0 5px; }
+    ul { list-style: none; padding: 0; margin: 0 0 15px; }
+    li { background: #f5f5f5; margin: 5px 0; padding: 8px; border-radius: 4px; word-break: break-word; }
+    .job-status { font-weight: bold; display: inline-block; padding: 2px 6px; border-radius: 12px; font-size: 11px; margin-left: 8px; }
+    .queued { background: #ff9800; color: white; }
+    .downloading { background: #4caf50; color: white; }
+    .completed { background: #2196f3; color: white; }
+    .error { background: #f44336; color: white; }
+    button { background: #e0e0e0; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; margin-left: 8px; }
+    button:hover { background: #ccc; }
+    .retry-btn { background: #4caf50; color: white; }
+    .retry-btn:hover { background: #45a049; }
+    .clear-btn { background: #f44336; color: white; margin-top: 10px; }
+    .small { font-size: 11px; color: #666; }
+  </style>
+</head>
+<body>
+    <div style="margin-bottom: 10px;">
+    <label>
+        <input type="checkbox" id="use-cookies-checkbox"> Использовать cookies
+    </label>
+    </div>
+  <h3>📥 Current download</h3>
+  <ul id="downloading-list"></ul>
+
+  <h3>⏳ Queue (<span id="queue-count">0</span>)</h3>
+  <ul id="queue-list"></ul>
+
+  <h3>✅ Completed</h3>
+  <ul id="completed-list"></ul>
+
+  <h3>❌ Errors</h3>
+  <ul id="errors-list"></ul>
+
+  <button id="clear-all-btn" class="clear-btn">Clear all history</button>
+
+  <script src="popup.js"></script>
+</body>
+</html>
