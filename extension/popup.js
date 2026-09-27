@@ -1,99 +1,191 @@
-// popup.js – взаимодействие со страницей управления
+// popup.js — интерфейс очереди.
+// Весь DOM строится через createElement: названия треков приходят со сторонних
+// страниц, поэтому innerHTML использовать нельзя.
 
-let currentData = { queue: [], history: [] };
+const isTabView = new URLSearchParams(location.search).get("view") === "tab";
 
-async function loadCookiesSetting() {
-  const result = await chrome.storage.local.get(['useCookies']);
-  const checkbox = document.getElementById('use-cookies-checkbox');
-  if (checkbox) {
-    checkbox.checked = result.useCookies === true;
+const el = (id) => document.getElementById(id);
+
+/* -------------------------------------------------------------- вспомогательное */
+
+function showToast(text, kind) {
+  const toast = el("toast");
+  toast.textContent = text;
+  toast.className = `show ${kind}`;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => {
+    toast.className = "";
+  }, 4000);
+}
+
+function send(action, payload = {}) {
+  return chrome.runtime.sendMessage({ action, ...payload });
+}
+
+function timeOf(iso) {
+  return iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+}
+
+/* ------------------------------------------------------------------ загрузка */
+
+async function startDownload(mode) {
+  const button = el(mode === "playlist" ? "download-playlist" : "download-track");
+  button.disabled = true;
+  try {
+    const result = await send("enqueueCurrent", { mode });
+    if (result?.ok) {
+      showToast(`Добавлено: ${result.job.label}`, "ok");
+    } else {
+      showToast(result?.error || "Не удалось добавить задачу", "err");
+    }
+  } catch (error) {
+    showToast(error.message, "err");
+  } finally {
+    button.disabled = false;
+    render();
   }
 }
 
-// Сохранение настройки при изменении
-function setupCookiesCheckbox() {
-  const checkbox = document.getElementById('use-cookies-checkbox');
-  if (!checkbox) return;
-  checkbox.addEventListener('change', async (e) => {
-    await chrome.storage.local.set({ useCookies: e.target.checked });
-  });
-}
+/* -------------------------------------------------------------------- рендер */
 
-function formatJob(job) {
-  const displayName = job.searchQuery || job.url || 'unknown';
-  return `${displayName} (added: ${new Date(job.addedAt).toLocaleTimeString()})`;
-}
+function listItem(job, { showTime = true, action } = {}) {
+  const li = document.createElement("li");
 
-function render() {
-  // Получаем данные из storage
-  chrome.storage.local.get(['downloadQueue', 'downloadHistory'], (result) => {
-    const queue = result.downloadQueue || [];
-    const history = result.downloadHistory || [];
+  const dot = document.createElement("span");
+  dot.className = `dot ${job.status}`;
+  li.append(dot);
 
-    // Текущее скачивание
-    const downloading = queue.filter(j => j.status === 'downloading');
-    const queued = queue.filter(j => j.status === 'queued');
+  const title = document.createElement("span");
+  title.className = "title";
+  title.textContent = job.label || job.url;
+  title.title = job.errorMsg || job.url;
+  li.append(title);
 
-    document.getElementById('downloading-list').innerHTML = downloading.map(job => `
-      <li>${formatJob(job)} <span class="job-status downloading">downloading</span></li>
-    `).join('') || '<li>None</li>';
+  if (job.mode === "playlist") {
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = "альбом";
+    li.append(tag);
+  }
 
-    document.getElementById('queue-count').innerText = queued.length;
-    document.getElementById('queue-list').innerHTML = queued.map(job => `
-      <li>${formatJob(job)} <span class="job-status queued">queued</span>
-      <button class="cancel-btn" data-id="${job.id}">Cancel</button></li>
-    `).join('') || '<li>Queue is empty</li>';
+  if (showTime) {
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = timeOf(job.finishedAt || job.addedAt);
+    li.append(meta);
+  }
 
-    // Завершённые
-    const completed = history.filter(j => j.status === 'completed');
-    document.getElementById('completed-list').innerHTML = completed.map(job => `
-      <li>${formatJob(job)} <span class="job-status completed">done</span></li>
-    `).join('') || '<li>None</li>';
-
-    // Ошибки
-    const errors = history.filter(j => j.status === 'error');
-    document.getElementById('errors-list').innerHTML = errors.map(job => `
-      <li>${formatJob(job)} <span class="job-status error">error</span>
-      <button class="retry-btn" data-id="${job.id}">Retry</button></li>
-    `).join('') || '<li>No errors</li>';
-
-    // Вешаем обработчики на кнопки отмены и повтора
-    document.querySelectorAll('.cancel-btn').forEach(btn => {
-      btn.onclick = () => cancelJob(btn.dataset.id);
-    });
-    document.querySelectorAll('.retry-btn').forEach(btn => {
-      btn.onclick = () => retryJob(btn.dataset.id);
-    });
-  });
-}
-
-function cancelJob(jobId) {
-  chrome.runtime.sendMessage({ action: 'cancelJob', jobId: jobId }, () => {
-    render();
-  });
-}
-
-function retryJob(jobId) {
-  chrome.runtime.sendMessage({ action: 'retryJob', jobId: jobId }, () => {
-    render();
-  });
-}
-
-document.getElementById('clear-all-btn').onclick = () => {
-  if (confirm('Clear all history (completed and errors)?')) {
-    chrome.runtime.sendMessage({ action: 'clearHistory' }, () => {
+  if (action) {
+    const button = document.createElement("button");
+    button.className = "icon";
+    button.textContent = action.label;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const result = await send(action.name, { jobId: job.id });
+      if (result?.error) showToast(result.error, "err");
       render();
     });
+    li.append(button);
   }
-};
 
-// Обновляем при открытии попапа и при изменениях в storage
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes.downloadQueue || changes.downloadHistory)) {
+  return li;
+}
+
+function fill(listId, jobs, emptyText, options) {
+  const list = el(listId);
+  list.replaceChildren();
+  if (!jobs.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = emptyText;
+    list.append(li);
+    return;
+  }
+  list.append(...jobs.map((job) => listItem(job, options)));
+}
+
+async function render() {
+  const { downloadQueue = [], downloadHistory = [], activeProgress = null } =
+    await chrome.storage.local.get(["downloadQueue", "downloadHistory", "activeProgress"]);
+
+  const active = downloadQueue.find((j) => j.status === "downloading");
+  const queued = downloadQueue.filter((j) => j.status === "queued");
+
+  const activeBox = el("active");
+  if (active) {
+    const percent = activeProgress?.jobId === active.id ? activeProgress.progress : active.progress || 0;
+    activeBox.hidden = false;
+    el("active-name").textContent = active.label || active.url;
+    el("active-status").textContent =
+      (activeProgress?.jobId === active.id ? activeProgress.message : active.progressMessage) || "Загрузка...";
+    el("active-bar").style.width = `${Math.min(100, Math.max(0, percent))}%`;
+  } else {
+    activeBox.hidden = true;
+  }
+
+  el("queue-count").textContent = String(queued.length);
+  fill("queue-list", queued, "Очередь пуста", {
+    action: { name: "cancelJob", label: "✕" },
+  });
+
+  fill("history-list", downloadHistory.slice(0, 30), "Пока ничего не скачано", {
+    action: undefined,
+  });
+
+  // Кнопка повтора только у ошибочных задач.
+  const historyList = el("history-list");
+  downloadHistory.slice(0, 30).forEach((job, index) => {
+    if (job.status !== "error") return;
+    const li = historyList.children[index];
+    if (!li) return;
+    const retry = document.createElement("button");
+    retry.className = "icon";
+    retry.textContent = "↻";
+    retry.title = job.errorMsg || "Повторить";
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      const result = await send("retryJob", { jobId: job.id });
+      if (result?.error) showToast(result.error, "err");
+      render();
+    });
+    li.append(retry);
+  });
+}
+
+/* -------------------------------------------------------------------- старт */
+
+async function init() {
+  if (isTabView) document.body.classList.add("tab-view");
+  el("version").textContent = `v${chrome.runtime.getManifest().version}`;
+
+  const { useCookies } = await chrome.storage.local.get(["useCookies"]);
+  el("use-cookies").checked = useCookies === true;
+  el("use-cookies").addEventListener("change", (event) => {
+    chrome.storage.local.set({ useCookies: event.target.checked });
+  });
+
+  el("download-track").addEventListener("click", () => startDownload("track"));
+  el("download-playlist").addEventListener("click", () => startDownload("playlist"));
+  el("clear-history").addEventListener("click", async () => {
+    await send("clearHistory");
     render();
-  }
-});
+  });
+  el("open-tab").addEventListener("click", () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL("popup.html?view=tab") });
+    window.close();
+  });
 
-render();
-loadCookiesSetting();
-setupCookiesCheckbox();
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local") render();
+  });
+
+  await render();
+
+  // Клик по иконке = сразу качаем текущий трек (поведение старой версии).
+  // Пункт «Открыть меню» в ПКМ выставляет флаг, который это подавляет.
+  const { suppressAutoDownload } = await chrome.storage.local.get(["suppressAutoDownload"]);
+  await chrome.storage.local.remove("suppressAutoDownload");
+  if (!isTabView && !suppressAutoDownload) startDownload("track");
+}
+
+init();

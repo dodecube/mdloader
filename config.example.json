@@ -1,0 +1,6 @@
+{
+  "download_dir": "E:/home/music-shazam",
+  "yt_dlp_path": "E:/home/music-shazam/deps/yt-dlp.exe",
+  "ffmpeg_dir": "E:/home/music-shazam/deps/ffmpeg/bin",
+  "cookies_path": "E:/home/music-shazam/deps/cookies.txt"
+}
